@@ -213,6 +213,8 @@ class ESP32FlashHeaderTests(BaseTestCase):
         finally:
             try_delete(BIN)
 
+    def test_fail(self):
+        self.fail()  #
 
 if __name__ == '__main__':
     print "Running image generation tests..."

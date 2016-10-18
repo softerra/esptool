@@ -1082,6 +1082,7 @@ class OTAFirmwareImage(BaseFirmwareImage):
                                   irom_offs & ~(ESPLoader.ESP_FLASH_SECTOR - 1))
 
     def save(self, filename):
+        print("flash_size_freq 0x%x" % self.flash_size_freq)
         with open(filename, 'wb') as f:
             # Save first header for irom0 segment
             f.write(struct.pack('<BBBBI', ESPBOOTLOADER.IMAGE_V2_MAGIC, ESPBOOTLOADER.IMAGE_V2_SEGMENT,
