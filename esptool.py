@@ -1041,6 +1041,7 @@ def find_esp(args):
             rboot = 0
             oprog = 0
             name = '-'
+            version = '-'
 
             # upload flasher and read rboot config area
             flasher = CesantaFlasher(esp, args.baud)
@@ -1059,24 +1060,26 @@ def find_esp(args):
                 if (oconf[0] == OPROG_MAGIC):
                     oprog = 1
 
-                    chksum = struct.unpack_from('BBBB', data, 128)    # chksum byte, 0, 0xff, 0xff
-                    calcsum = 0xef
-                    for c in data[:128]:
-                        calcsum = calcsum ^ ord(c)
-                    print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], calcsum))
+#                     chksum = struct.unpack_from('BBBB', data, 128)    # chksum byte, 0, 0xff, 0xff
+#                     calcsum = 0xef
+#                     for c in data[:128]:
+#                         calcsum = calcsum ^ ord(c)
+#                     print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], calcsum))
 
                     if (oconf[1] & OPROG_BCONF_NODE_INFO):
+                        vparts = ((oconf[2] >> 16) & 0xff, (oconf[2] >> 8) & 0xff, oconf[2] & 0xff)
+                        version = '.'.join(map(str, vparts))
                         #oconfStr = struct.unpack_from('31sB31sB31sB', data, 32)
                         oconfStr = struct.unpack_from('31s', data, 32)
                         nodeName = oconfStr[0];
                         name = nodeName[:nodeName.index('\x00')]
 
             # add port description to the list
-            ports.append((port, chipid, rboot, oprog, name))
+            ports.append((port, chipid, rboot, oprog, name, version))
         except:
             pass
     for port in ports:
-        print("Found:%s:0x%08x:%d:%d:%s" % port)
+        print("Found:%s:0x%08x:%d:%d:%s:%s" % port)
 #
 # End of operations functions
 #
