@@ -29,10 +29,9 @@ import subprocess
 import sys
 import tempfile
 import time
-
+import serial.tools.list_ports
 
 __version__ = "1.2-dev"
-
 
 class ESPROM(object):
     # These are the currently known commands supported by the ROM
@@ -123,9 +122,29 @@ class ESPROM(object):
         for i in xrange(7):
             self.command()
 
+    """ Take N attempts to connect w/o resetting
+        Return True on successful connect, False otherwise """
+    def quick_connect(self, n):
+        # worst-case latency timer should be 255ms (probably <20ms)
+        self._port.timeout = 0.3
+        for _ in xrange(n):
+            try:
+                self._port.flushInput()
+                self._slip_reader = slip_reader(self._port)
+                self._port.flushOutput()
+                self.sync()
+                self._port.timeout = 5
+                return True
+            except:
+                time.sleep(0.05)
+        return False
+
     """ Try connecting repeatedly until successful, or giving up """
     def connect(self):
-        print 'Connecting...'
+        if (self.quick_connect(2)):
+            return;
+
+        print('Connecting...')
 
         for _ in xrange(4):
             # issue reset-to-bootloader:
@@ -141,16 +160,8 @@ class ESPROM(object):
 
             # worst-case latency timer should be 255ms (probably <20ms)
             self._port.timeout = 0.3
-            for _ in xrange(4):
-                try:
-                    self._port.flushInput()
-                    self._slip_reader = slip_reader(self._port)
-                    self._port.flushOutput()
-                    self.sync()
-                    self._port.timeout = 5
-                    return
-                except:
-                    time.sleep(0.05)
+            if (self.quick_connect(4)):
+                return
         raise FatalError('Failed to connect to ESP8266')
 
     """ Read memory address in target """
@@ -556,6 +567,7 @@ class CesantaFlasher(object):
     CMD_FLASH_READ = 2
     CMD_FLASH_DIGEST = 3
     CMD_BOOT_FW = 6
+    CMD_REBOOT = 7
 
     def __init__(self, esp, baud_rate=0):
         print 'Running Cesanta flasher stub...'
@@ -675,6 +687,15 @@ class CesantaFlasher(object):
         if status_code != 0:
             raise FatalError('Boot failure, status: %x' % status_code)
 
+    def reset(self):
+        self._esp.write(struct.pack('<B', self.CMD_REBOOT))
+        p = self._esp.read()
+        if len(p) != 1:
+            raise FatalError('Expected status, got: %s' % hexify(p))
+        status_code = struct.unpack('<B', p)[0]
+        if status_code != 0:
+            raise FatalError('Reset failure, status: %x' % status_code)
+        print("Soft reset done")
 
 def slip_reader(port):
     """Generator to read SLIP packets from a serial port.
@@ -849,7 +870,10 @@ def write_flash(esp, args):
     if args.verify:
         print 'Verifying just-written flash...'
         _verify_flash(flasher, args, flash_params)
-    flasher.boot_fw()
+    if args.reset:
+        flasher.reset()
+    else:
+        flasher.boot_fw()
 
 
 def image_info(args):
@@ -996,6 +1020,63 @@ def verify_flash(esp, args, flash_params=None):
 def version(args):
     print __version__
 
+def find_esp(args):
+    BOOT_CONFIG_MAGIC = 0xe1
+    BOOT_CONFIG_VERSION = 0x01
+    OPROG_MAGIC = 0xb6c3
+    OPROG_BCONF_NODE_INFO = 0x0002
+
+    ports_all = serial.tools.list_ports.comports()
+    ports = []
+    for _, (port, _, _) in enumerate(ports_all, 1):
+        if (port.find('ttyUSB') == -1):
+            continue
+        try:
+            # try connecting and get chip_id
+            print('Trying %s...' % port)
+            initial_baud = min(ESPROM.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
+            esp = ESPROM(port, initial_baud)
+            esp.connect()
+            chipid = esp.chip_id()
+            rboot = 0
+            oprog = 0
+            name = '-'
+
+            # upload flasher and read rboot config area
+            flasher = CesantaFlasher(esp, args.baud)
+            data = flasher.flash_read(0x1000, 0x100, False)
+            flasher.reset()
+
+            # check rboot config and extract the node name
+            #print("Got data len=%d" % len(data))
+            #print(" ".join("{:02x}".format(ord(c)) for c in data[:132]))
+
+            rconf = struct.unpack_from('BB', data, 0)
+            if (rconf[0] == BOOT_CONFIG_MAGIC and rconf[1] == BOOT_CONFIG_VERSION):
+                rboot = 1
+                #rchksum = struct.unpack_from('BB', data, 24)    # chksum byte, 0xff
+                oconf = struct.unpack_from('=HHI', data, 24)
+                if (oconf[0] == OPROG_MAGIC):
+                    oprog = 1
+
+                    chksum = struct.unpack_from('BBBB', data, 128)    # chksum byte, 0, 0xff, 0xff
+                    calcsum = 0xef
+                    for c in data[:128]:
+                        calcsum = calcsum ^ ord(c)
+                    print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], calcsum))
+
+                    if (oconf[1] & OPROG_BCONF_NODE_INFO):
+                        #oconfStr = struct.unpack_from('31sB31sB31sB', data, 32)
+                        oconfStr = struct.unpack_from('31s', data, 32)
+                        nodeName = oconfStr[0];
+                        name = nodeName[:nodeName.index('\x00')]
+
+            # add port description to the list
+            ports.append((port, chipid, rboot, oprog, name))
+        except:
+            pass
+    for port in ports:
+        print("Found:%s:0x%08x:%d:%d:%s" % port)
 #
 # End of operations functions
 #
@@ -1063,6 +1144,7 @@ def main():
     add_spi_flash_subparsers(parser_write_flash)
     parser_write_flash.add_argument('--no-progress', '-p', help='Suppress progress output', action="store_true")
     parser_write_flash.add_argument('--verify', help='Verify just-written data (only necessary if very cautious, data is already CRCed', action='store_true')
+    parser_write_flash.add_argument('--reset', help='Perform soft reset instead of running just written code', action='store_true')
 
     subparsers.add_parser(
         'run',
@@ -1124,13 +1206,17 @@ def main():
     subparsers.add_parser(
         'version', help='Print esptool version')
 
+    subparsers.add_parser(
+        'find_esp',
+        help='Find ports with ESP devices attached')
+
     # internal sanity check - every operation matches a module function of the same name
     for operation in subparsers.choices.keys():
         assert operation in globals(), "%s should be a module function" % operation
 
     args = parser.parse_args()
 
-    print 'esptool.py v%s' % __version__
+    print('esptool.py v%s' % __version__)
 
     # operation function can take 1 arg (args), 2 args (esp, arg)
     # or be a member function of the ESPROM class.
