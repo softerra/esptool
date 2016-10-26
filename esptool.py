@@ -1029,8 +1029,8 @@ def find_esp(args):
     ports_all = serial.tools.list_ports.comports()
     ports = []
     for _, (port, _, _) in enumerate(ports_all, 1):
-        if (port.find('ttyUSB') == -1):
-            continue
+#         if (port.find('ttyUSB') == -1):
+#             continue
         try:
             # try connecting and get chip_id
             print('Trying %s...' % port)
@@ -1061,10 +1061,7 @@ def find_esp(args):
                     oprog = 1
 
 #                     chksum = struct.unpack_from('BBBB', data, 128)    # chksum byte, 0, 0xff, 0xff
-#                     calcsum = 0xef
-#                     for c in data[:128]:
-#                         calcsum = calcsum ^ ord(c)
-#                     print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], calcsum))
+#                     print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], esp.checksum(data[:128])))
 
                     if (oconf[1] & OPROG_BCONF_NODE_INFO):
                         vparts = ((oconf[2] >> 16) & 0xff, (oconf[2] >> 8) & 0xff, oconf[2] & 0xff)
