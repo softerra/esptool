@@ -574,7 +574,6 @@ class CesantaFlasher(object):
     CMD_FLASH_READ = 2
     CMD_FLASH_DIGEST = 3
     CMD_BOOT_FW = 6
-    CMD_REBOOT = 7
 
     def __init__(self, esp, baud_rate=0):
         print 'Running Cesanta flasher stub...'
