@@ -164,6 +164,13 @@ class ESPROM(object):
                 return
         raise FatalError('Failed to connect to ESP8266')
 
+    def hard_reset(self):
+        self._port.setDTR(False)
+        self._port.setRTS(True)  # EN->LOW
+        time.sleep(0.1)
+        self._port.setRTS(False)
+        print("Hard reset done (if supported via RTS)")
+
     """ Read memory address in target """
     def read_reg(self, addr):
         res = self.command(ESPROM.ESP_READ_REG, struct.pack('<I', addr))
@@ -687,16 +694,6 @@ class CesantaFlasher(object):
         if status_code != 0:
             raise FatalError('Boot failure, status: %x' % status_code)
 
-    def reset(self):
-        self._esp.write(struct.pack('<B', self.CMD_REBOOT))
-        p = self._esp.read()
-        if len(p) != 1:
-            raise FatalError('Expected status, got: %s' % hexify(p))
-        status_code = struct.unpack('<B', p)[0]
-        if status_code != 0:
-            raise FatalError('Reset failure, status: %x' % status_code)
-        print("Soft reset done")
-
 def slip_reader(port):
     """Generator to read SLIP packets from a serial port.
     Yields one full SLIP packet at a time, raises exception on timeout or invalid data.
@@ -871,7 +868,7 @@ def write_flash(esp, args):
         print 'Verifying just-written flash...'
         _verify_flash(flasher, args, flash_params)
     if args.reset:
-        flasher.reset()
+        esp.hard_reset()
     else:
         flasher.boot_fw()
 
@@ -1046,7 +1043,7 @@ def find_esp(args):
             # upload flasher and read rboot config area
             flasher = CesantaFlasher(esp, args.baud)
             data = flasher.flash_read(0x1000, 0x100, False)
-            flasher.reset()
+            esp.hard_reset()
 
             # check rboot config and extract the node name
             #print("Got data len=%d" % len(data))
@@ -1144,7 +1141,7 @@ def main():
     add_spi_flash_subparsers(parser_write_flash)
     parser_write_flash.add_argument('--no-progress', '-p', help='Suppress progress output', action="store_true")
     parser_write_flash.add_argument('--verify', help='Verify just-written data (only necessary if very cautious, data is already CRCed', action='store_true')
-    parser_write_flash.add_argument('--reset', help='Perform soft reset instead of running just written code', action='store_true')
+    parser_write_flash.add_argument('--reset', help='Try doing hard reset (via RTS) instead of running just written code', action='store_true')
 
     subparsers.add_parser(
         'run',
