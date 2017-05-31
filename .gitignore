@@ -8,3 +8,5 @@ esptool.egg-info
 build
 dist
 .eggs
+.project
+.pydevproject
