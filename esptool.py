@@ -29,6 +29,7 @@ import time
 import base64
 import zlib
 import shlex
+import serial.tools.list_ports
 
 __version__ = "2.0-beta3"
 
@@ -63,7 +64,6 @@ def stub_function_only(func):
 def stub_and_esp32_function_only(func):
     """ Attribute for a function only supported by software stubs or ESP32 ROM """
     return check_supported_function(func, lambda o: o.IS_STUB or o.CHIP_NAME == "ESP32")
-
 
 PYTHON2 = sys.version_info[0] < 3  # True if on pre-Python 3
 
@@ -281,7 +281,7 @@ class ESPLoader(object):
         for i in range(7):
             self.command()
 
-    def _connect_attempt(self, mode='default_reset', esp32r0_delay=False):
+    def _connect_attempt(self, mode='default_reset', esp32r0_delay=False, attempts=5):
         """ A single connection attempt, with esp32r0 workaround options """
         # esp32r0_delay is a workaround for bugs with the most common auto reset
         # circuit and Windows, if the EN pin on the dev board does not have
@@ -320,7 +320,7 @@ class ESPLoader(object):
             self._port.setDTR(False)  # IO0=HIGH, done
 
         self._port.timeout = 0.1
-        for _ in range(5):
+        for _ in range(attempts):
             try:
                 self.flush_input()
                 self._port.flushOutput()
@@ -336,12 +336,16 @@ class ESPLoader(object):
                 time.sleep(0.05)
                 last_error = e
         return last_error
-
+    
     def connect(self, mode='default_reset'):
         """ Try connecting repeatedly until successful, or giving up """
         print('Connecting...', end='')
         sys.stdout.flush()
         last_error = None
+
+        """ Take 2 attempts to connect w/o resetting """
+        if (self._connect_attempt(mode='no_reset', esp32r0_delay=False, 2) is None):
+            return
 
         try:
             for _ in range(10):
@@ -759,9 +763,12 @@ class ESPLoader(object):
         self.run_spiflash_command(SPIFLASH_WRDI)
 
     def hard_reset(self):
+#TODO: remove it if it is not needed more
+#        self._port.setDTR(False)
         self._port.setRTS(True)  # EN->LOW
         time.sleep(0.1)
         self._port.setRTS(False)
+        print("Hard reset done (if supported via RTS)")
 
     def soft_reset(self, stay_in_bootloader):
         if not self.IS_STUB:
@@ -1402,7 +1409,6 @@ class ELFFile(object):
                          if lma != 0]
         self.sections = prog_sections
 
-
 def slip_reader(port):
     """Generator to read SLIP packets from a serial port.
     Yields one full SLIP packet at a time, raises exception on timeout or invalid data.
@@ -1692,7 +1698,11 @@ def write_flash(esp, args):
         print('Verifying just-written flash...')
         print('(This option is deprecated, flash contents are now always read back after flashing.)')
         _verify_flash(esp, args)
-
+#TODO: remove if not needed
+#    if args.reset:
+#        esp.hard_reset()
+#    else:
+#        flasher.boot_fw()
 
 def image_info(args):
     image = LoadFirmwareImage(args.chip, args.filename)
@@ -1860,6 +1870,63 @@ def write_flash_status(esp, args):
 def version(args):
     print(__version__)
 
+def find_esp(args):
+    BOOT_CONFIG_MAGIC = 0xe1
+    BOOT_CONFIG_VERSION = 0x01
+    OPROG_MAGIC = 0xb6c3
+    OPROG_BCONF_NODE_INFO = 0x0002
+
+    ports_all = serial.tools.list_ports.comports()
+    ports = []
+    for _, (port, _, _) in enumerate(ports_all, 1):
+#         if (port.find('ttyUSB') == -1):
+#             continue
+        try:
+            # try connecting and get chip_id
+            print('Trying %s...' % port)
+            initial_baud = min(ESPROM.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
+            esp = ESPROM(port, initial_baud)
+            esp.connect()
+            chipid = esp.chip_id()
+            rboot = 0
+            oprog = 0
+            name = '-'
+            version = '-'
+
+            # upload flasher and read rboot config area
+            flasher = CesantaFlasher(esp, args.baud)
+            data = flasher.flash_read(0x1000, 0x100, False)
+            esp.hard_reset()
+
+            # check rboot config and extract the node name
+            #print("Got data len=%d" % len(data))
+            #print(" ".join("{:02x}".format(ord(c)) for c in data[:132]))
+
+            rconf = struct.unpack_from('BB', data, 0)
+            if (rconf[0] == BOOT_CONFIG_MAGIC and rconf[1] == BOOT_CONFIG_VERSION):
+                rboot = 1
+                #rchksum = struct.unpack_from('BB', data, 24)    # chksum byte, 0xff
+                oconf = struct.unpack_from('=HHI', data, 24)
+                if (oconf[0] == OPROG_MAGIC):
+                    oprog = 1
+
+#                     chksum = struct.unpack_from('BBBB', data, 128)    # chksum byte, 0, 0xff, 0xff
+#                     print('read sum={:02x}, calc sum={:02x}'.format(chksum[0], esp.checksum(data[:128])))
+
+                    if (oconf[1] & OPROG_BCONF_NODE_INFO):
+                        vparts = ((oconf[2] >> 16) & 0xff, (oconf[2] >> 8) & 0xff, oconf[2] & 0xff)
+                        version = '.'.join(map(str, vparts))
+                        #oconfStr = struct.unpack_from('31sB31sB31sB', data, 32)
+                        oconfStr = struct.unpack_from('31s', data, 32)
+                        nodeName = oconfStr[0];
+                        name = nodeName[:nodeName.index('\x00')]
+
+            # add port description to the list
+            ports.append((port, chipid, rboot, oprog, name, version))
+        except:
+            pass
+    for port in ports:
+        print("Found:%s:0x%08x:%d:%d:%s:%s" % port)
 #
 # End of operations functions
 #
@@ -1960,6 +2027,8 @@ def main():
     compress_args = parser_write_flash.add_mutually_exclusive_group(required=False)
     compress_args.add_argument('--compress', '-z', help='Compress data in transfer (default unless --no-stub is specified)',action="store_true", default=None)
     compress_args.add_argument('--no-compress', '-u', help='Disable data compression during transfer (default if --no-stub is specified)',action="store_true")
+#TODO: check if this reset is no more needed and remove 
+#    parser_write_flash.add_argument('--reset', help='Try doing hard reset (via RTS) instead of running just written code', action='store_true')
 
     subparsers.add_parser(
         'run',
@@ -2048,6 +2117,10 @@ def main():
 
     subparsers.add_parser(
         'version', help='Print esptool version')
+
+    subparsers.add_parser(
+        'find_esp',
+        help='Find ports with ESP devices attached')
 
     # internal sanity check - every operation matches a module function of the same name
     for operation in subparsers.choices.keys():
