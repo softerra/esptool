@@ -336,7 +336,7 @@ class ESPLoader(object):
                 time.sleep(0.05)
                 last_error = e
         return last_error
-    
+
     def connect(self, mode='default_reset'):
         """ Try connecting repeatedly until successful, or giving up """
         print('Connecting...', end='')
@@ -344,7 +344,7 @@ class ESPLoader(object):
         last_error = None
 
         """ Take 2 attempts to connect w/o resetting """
-        if (self._connect_attempt(mode='no_reset', esp32r0_delay=False, 2) is None):
+        if (self._connect_attempt(mode='no_reset', esp32r0_delay=False, attempts=2) is None):
             return
 
         try:
@@ -768,7 +768,7 @@ class ESPLoader(object):
         self._port.setRTS(True)  # EN->LOW
         time.sleep(0.1)
         self._port.setRTS(False)
-        print("Hard reset done (if supported via RTS)")
+        print('Hard reset done (if supported via RTS)')
 
     def soft_reset(self, stay_in_bootloader):
         if not self.IS_STUB:
@@ -1884,19 +1884,22 @@ def find_esp(args):
         try:
             # try connecting and get chip_id
             print('Trying %s...' % port)
-            initial_baud = min(ESPROM.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
-            esp = ESPROM(port, initial_baud)
-            esp.connect()
-            chipid = esp.chip_id()
+
+            try:
+                args.port = port
+                esp = esp_operation_begin(args)
+                chipid = esp.chip_id()
+                #print('ChipID=0x%08X' % chipid)
+                data = esp.read_flash(0x1000, 0x100)    # read rboot config area
+                esp_operation_end(esp, args)
+            except FatalError as e:
+                print('Error: %s' % e)
+                continue
+
             rboot = 0
             oprog = 0
             name = '-'
             version = '-'
-
-            # upload flasher and read rboot config area
-            flasher = CesantaFlasher(esp, args.baud)
-            data = flasher.flash_read(0x1000, 0x100, False)
-            esp.hard_reset()
 
             # check rboot config and extract the node name
             #print("Got data len=%d" % len(data))
@@ -1931,6 +1934,58 @@ def find_esp(args):
 # End of operations functions
 #
 
+def esp_operation_begin(args):
+    initial_baud = min(ESPLoader.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
+    if args.chip == 'auto':
+        esp = ESPLoader.detect_chip(args.port, initial_baud, args.before)
+    else:
+        chip_class = {
+            'esp8266': ESP8266ROM,
+            'esp32': ESP32ROM,
+        }[args.chip]
+        esp = chip_class(args.port, initial_baud)
+        esp.connect(args.before)
+
+    if not args.no_stub:
+        esp = esp.run_stub()
+
+    if args.baud > initial_baud:
+        try:
+            esp.change_baud(args.baud)
+        except NotImplementedInROMError:
+            print("WARNING: ROM doesn't support changing baud rate. Keeping initial baud rate %d" % initial_baud)
+
+    # override common SPI flash parameter stuff if configured to do so
+    if hasattr(args, "spi_connection") and args.spi_connection is not None:
+        if esp.CHIP_NAME != "ESP32":
+            raise FatalError("Chip %s does not support --spi-connection option." % esp.CHIP_NAME)
+        print("Configuring SPI flash mode...")
+        esp.flash_spi_attach(args.spi_connection)
+    elif args.no_stub:
+        print("Enabling default SPI flash mode...")
+        # ROM loader doesn't enable flash unless we explicitly do it
+        esp.flash_spi_attach(0)
+
+    if hasattr(args, "flash_size"):
+        print("Configuring flash size...")
+        detect_flash_size(esp, args)
+        esp.flash_set_parameters(flash_size_bytes(args.flash_size))
+
+    return esp
+
+def esp_operation_end(esp, args):
+    # finish execution based on args.after
+    if args.after == 'hard_reset':
+        print('Hard resetting...')
+        esp.hard_reset()
+    elif args.after == 'soft_reset':
+        print('Soft resetting...')
+        # flash_finish will trigger a soft reset
+        esp.soft_reset(False)
+    else:
+        print('Staying in bootloader.')
+        if esp.IS_STUB:
+            esp.soft_reset(True)  # exit stub back to ROM loader
 
 def main():
     parser = argparse.ArgumentParser(description='esptool.py v%s - ESP8266 ROM Bootloader Utility' % __version__, prog='esptool')
@@ -2027,7 +2082,7 @@ def main():
     compress_args = parser_write_flash.add_mutually_exclusive_group(required=False)
     compress_args.add_argument('--compress', '-z', help='Compress data in transfer (default unless --no-stub is specified)',action="store_true", default=None)
     compress_args.add_argument('--no-compress', '-u', help='Disable data compression during transfer (default if --no-stub is specified)',action="store_true")
-#TODO: check if this reset is no more needed and remove 
+#TODO: check if this reset is no more needed and remove
 #    parser_write_flash.add_argument('--reset', help='Try doing hard reset (via RTS) instead of running just written code', action='store_true')
 
     subparsers.add_parser(
@@ -2142,57 +2197,11 @@ def main():
     operation_func = globals()[args.operation]
     operation_args,_,_,_ = inspect.getargspec(operation_func)
     if operation_args[0] == 'esp':  # operation function takes an ESPLoader connection object
-        initial_baud = min(ESPLoader.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
-        if args.chip == 'auto':
-            esp = ESPLoader.detect_chip(args.port, initial_baud, args.before)
-        else:
-            chip_class = {
-                'esp8266': ESP8266ROM,
-                'esp32': ESP32ROM,
-            }[args.chip]
-            esp = chip_class(args.port, initial_baud)
-            esp.connect(args.before)
-
-        if not args.no_stub:
-            esp = esp.run_stub()
-
-        if args.baud > initial_baud:
-            try:
-                esp.change_baud(args.baud)
-            except NotImplementedInROMError:
-                print("WARNING: ROM doesn't support changing baud rate. Keeping initial baud rate %d" % initial_baud)
-
-        # override common SPI flash parameter stuff if configured to do so
-        if hasattr(args, "spi_connection") and args.spi_connection is not None:
-            if esp.CHIP_NAME != "ESP32":
-                raise FatalError("Chip %s does not support --spi-connection option." % esp.CHIP_NAME)
-            print("Configuring SPI flash mode...")
-            esp.flash_spi_attach(args.spi_connection)
-        elif args.no_stub:
-            print("Enabling default SPI flash mode...")
-            # ROM loader doesn't enable flash unless we explicitly do it
-            esp.flash_spi_attach(0)
-
-        if hasattr(args, "flash_size"):
-            print("Configuring flash size...")
-            detect_flash_size(esp, args)
-            esp.flash_set_parameters(flash_size_bytes(args.flash_size))
+        esp = esp_operation_begin(args)
 
         operation_func(esp, args)
 
-        # finish execution based on args.after
-        if args.after == 'hard_reset':
-            print('Hard resetting...')
-            esp.hard_reset()
-        elif args.after == 'soft_reset':
-            print('Soft resetting...')
-            # flash_finish will trigger a soft reset
-            esp.soft_reset(False)
-        else:
-            print('Staying in bootloader.')
-            if esp.IS_STUB:
-                esp.soft_reset(True)  # exit stub back to ROM loader
-
+        esp_operation_end(esp, args)
     else:
         operation_func(args)
 
