@@ -763,8 +763,9 @@ class ESPLoader(object):
         self.run_spiflash_command(SPIFLASH_WRDI)
 
     def hard_reset(self):
-#TODO: remove it if it is not needed more
-#        self._port.setDTR(False)
+        #NOTE: reset into normal operational mode
+        self._port.setDTR(False)
+
         self._port.setRTS(True)  # EN->LOW
         time.sleep(0.1)
         self._port.setRTS(False)
