@@ -1972,7 +1972,7 @@ def esp_operation_begin(args):
         detect_flash_size(esp, args)
         esp.flash_set_parameters(flash_size_bytes(args.flash_size))
 
-    if args.fix_flash_mode:
+    if hasattr(args, "fix_flash_mode") and args.fix_flash_mode:
         print("Verifying whether flash mode needs fixing...")
         flash_id = esp.flash_id()
         manufacturer_id = flash_id & 0xff
