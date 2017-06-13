@@ -1972,6 +1972,14 @@ def esp_operation_begin(args):
         detect_flash_size(esp, args)
         esp.flash_set_parameters(flash_size_bytes(args.flash_size))
 
+    if args.fix_flash_mode:
+        print("Verifying whether flash mode needs fixing...")
+        flash_id = esp.flash_id()
+        manufacturer_id = flash_id & 0xff
+        if manufacturer_id == 0xc8:
+            args.flash_mode = 'dio'
+            print('Force SPI mode dio for Manufacturer: %02x' % manufacturer_id)
+
     return esp
 
 def esp_operation_end(esp, args):
@@ -2069,6 +2077,9 @@ def main():
                             ' plus ESP8266-only (256KB, 512KB, 2MB-c1, 4MB-c1)',
                             action=FlashSizeAction, auto_detect=auto_detect,
                             default=os.environ.get('ESPTOOL_FS', 'detect' if auto_detect else '1MB'))
+        parent.add_argument('--fix-flash-mode',
+                            help='Fix SPI Flash mode depending on Manufacturer ID',
+                            action="store_true")
         add_spi_connection_arg(parent)
 
     parser_write_flash = subparsers.add_parser(
