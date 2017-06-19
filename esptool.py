@@ -1962,11 +1962,12 @@ def find_esp(args):
                         #oconfStr = struct.unpack_from('31sB31sB31sB', data, 32)
                         oconfStr = struct.unpack_from('31s', data, 32)
                         nodeName = oconfStr[0];
-                        name = nodeName[:nodeName.index('\x00')]
+                        name = nodeName[:nodeName.index(b'\x00')].decode();
 
             # add port description to the list
             ports.append((port, chipid, rboot, oprog, name, version))
         except:
+            print("unexpected error")
             pass
     for port in ports:
         print("Found:%s:0x%08x:%d:%d:%s:%s" % port)
