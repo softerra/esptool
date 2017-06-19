@@ -311,7 +311,11 @@ void cmd_loop() {
           uart_tx_flush(0);
 #endif
           ets_delay_us(10000);
+#ifdef ESP32
           software_reset();
+#else
+          _ResetVector();
+#endif
         }
         break;
       case ESP_MEM_END:
