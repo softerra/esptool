@@ -30,7 +30,6 @@ import base64
 import zlib
 import shlex
 import serial.tools.list_ports
-import platform
 
 __version__ = "2.0"
 
@@ -45,7 +44,6 @@ SYNC_TIMEOUT = 0.1        # timeout for syncing with bootloader
 DETECTED_FLASH_SIZES = {0x12: '256KB', 0x13: '512KB', 0x14: '1MB',
                         0x15: '2MB', 0x16: '4MB', 0x17: '8MB', 0x18: '16MB'}
 
-SYSTEM_NAME = platform.system()
 CONNECT_TRY_SET_DEFAULT = {'no_reset': 2, 'default': 5, 'loop' : 10}
 CONNECT_TRY_SET_FIND_ESP = {'no_reset': 2, 'default': 3, 'loop' : 3}
 
@@ -1929,7 +1927,7 @@ def find_esp(args):
     ports_all = serial.tools.list_ports.comports()
     ports = []
     for _, (port, _, _) in enumerate(ports_all, 1):
-        if (SYSTEM_NAME == 'Linux' and port.find('/ttyUSB') == -1):
+        if (sys.platform.startswith('linux') and port.find('/ttyUSB') == -1):
             continue
         try:
             # try connecting and get chip_id
