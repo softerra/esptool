@@ -30,6 +30,7 @@ import base64
 import zlib
 import shlex
 import serial.tools.list_ports
+import platform
 
 __version__ = "2.0"
 
@@ -41,10 +42,12 @@ START_FLASH_TIMEOUT = 20  # timeout for starting flash (may perform erase)
 CHIP_ERASE_TIMEOUT = 120  # timeout for full chip erase
 SYNC_TIMEOUT = 0.1        # timeout for syncing with bootloader
 
-
 DETECTED_FLASH_SIZES = {0x12: '256KB', 0x13: '512KB', 0x14: '1MB',
                         0x15: '2MB', 0x16: '4MB', 0x17: '8MB', 0x18: '16MB'}
 
+SYSTEM_NAME = platform.system()
+CONNECT_TRY_SET_DEFAULT = {'no_reset': 2, 'default': 5, 'loop' : 10}
+CONNECT_TRY_SET_FIND_ESP = {'no_reset': 2, 'default': 3, 'loop' : 3}
 
 def check_supported_function(func, check_func):
     """
@@ -187,7 +190,7 @@ class ESPLoader(object):
             raise FatalError("Failed to set baud rate %d. The driver may not support this rate." % baud)
 
     @staticmethod
-    def detect_chip(port=DEFAULT_PORT, baud=ESP_ROM_BAUD, connect_mode='default_reset'):
+    def detect_chip(port=DEFAULT_PORT, baud=ESP_ROM_BAUD, connect_mode='default_reset', operation='unspec'):
         """ Use serial access to detect the chip type.
 
         We use the UART's datecode register for this, it's mapped at
@@ -199,7 +202,7 @@ class ESPLoader(object):
         connect_mode parameter) as part of querying the chip.
         """
         detect_port = ESPLoader(port, baud)
-        detect_port.connect(connect_mode)
+        detect_port.connect(connect_mode, operation)
         print('Detecting chip type...', end='')
         sys.stdout.flush()
         date_reg = detect_port.read_reg(ESPLoader.UART_DATA_REG_ADDR)
@@ -352,22 +355,29 @@ class ESPLoader(object):
                 last_error = e
         return last_error
 
-    def connect(self, mode='default_reset'):
+    def connect(self, mode='default_reset', operation='unspec'):
         """ Try connecting repeatedly until successful, or giving up """
-        print('Connecting...', end='')
+        print('Connecting... ', end='')
         sys.stdout.flush()
         last_error = None
 
+        try_set = CONNECT_TRY_SET_DEFAULT
+        if (operation == 'find_esp'):
+            try_set = CONNECT_TRY_SET_FIND_ESP
+
         """ Take 2 attempts to connect w/o resetting """
-        if (self._connect_attempt(mode='no_reset', esp32r0_delay=False, attempts=2) is None):
+        if (self._connect_attempt(mode='no_reset', esp32r0_delay=False,
+                                  attempts=try_set['no_reset']) is None):
             return
 
         try:
-            for _ in range(10):
-                last_error = self._connect_attempt(mode=mode, esp32r0_delay=False)
+            for _ in range(try_set['loop']):
+                last_error = self._connect_attempt(mode=mode, esp32r0_delay=False,
+                                                   attempts=try_set['default'])
                 if last_error is None:
                     return
-                last_error = self._connect_attempt(mode=mode, esp32r0_delay=True)
+                last_error = self._connect_attempt(mode=mode, esp32r0_delay=True,
+                                                   attempts=try_set['default'])
                 if last_error is None:
                     return
         finally:
@@ -1919,8 +1929,8 @@ def find_esp(args):
     ports_all = serial.tools.list_ports.comports()
     ports = []
     for _, (port, _, _) in enumerate(ports_all, 1):
-#         if (port.find('ttyUSB') == -1):
-#             continue
+        if (SYSTEM_NAME == 'Linux' and port.find('/ttyUSB') == -1):
+            continue
         try:
             # try connecting and get chip_id
             print('Trying %s...' % port)
@@ -1978,14 +1988,14 @@ def find_esp(args):
 def esp_operation_begin(args):
     initial_baud = min(ESPLoader.ESP_ROM_BAUD, args.baud)  # don't sync faster than the default baud rate
     if args.chip == 'auto':
-        esp = ESPLoader.detect_chip(args.port, initial_baud, args.before)
+        esp = ESPLoader.detect_chip(args.port, initial_baud, args.before, args.operation)
     else:
         chip_class = {
             'esp8266': ESP8266ROM,
             'esp32': ESP32ROM,
         }[args.chip]
         esp = chip_class(args.port, initial_baud)
-        esp.connect(args.before)
+        esp.connect(args.before, args.operation)
 
     print("Chip is %s" % (esp.get_chip_description()))
 
