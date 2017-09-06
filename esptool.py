@@ -2034,6 +2034,15 @@ def esp_operation_begin(args):
 
 def esp_operation_end(esp, args):
     # finish execution based on args.after
+    if args.after == 'hn_reset':
+        print('Hard resetting.. or staying in bootloader.')
+        esp.hard_reset()
+        try:
+            esp.soft_reset(True)
+        except:
+            pass
+        return
+
     if args.after == 'hs_reset':
         print('Trying Hard, then Soft resetting...')
         esp.hard_reset()
@@ -2080,7 +2089,7 @@ def main():
     parser.add_argument(
         '--after', '-a',
         help='What to do after esptool.py is finished',
-        choices=['hard_reset', 'soft_reset', 'no_reset', 'hs_reset'],
+        choices=['hard_reset', 'soft_reset', 'no_reset', 'hs_reset', 'hn_reset'],
         default=os.environ.get('ESPTOOL_AFTER', 'hs_reset'))
 
     parser.add_argument(
