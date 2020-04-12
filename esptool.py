@@ -1923,6 +1923,7 @@ def find_esp(args):
     BOOT_CONFIG_VERSION = 0x01
     OPROG_MAGIC = 0xb6c3
     OPROG_BCONF_NODE_INFO = 0x0002
+    OPROG_BCONF_VER_EX_DATE = 0x0004
 
     ports_all = serial.tools.list_ports.comports()
     ports = []
@@ -1955,9 +1956,10 @@ def find_esp(args):
 
             rconf = struct.unpack_from('BB', data, 0)
             if (rconf[0] == BOOT_CONFIG_MAGIC and rconf[1] == BOOT_CONFIG_VERSION):
+                oprog_conf_offset = 24
                 rboot = 1
                 #rchksum = struct.unpack_from('BB', data, 24)    # chksum byte, 0xff
-                oconf = struct.unpack_from('=HHI', data, 24)
+                oconf = struct.unpack_from('<HHI', data, oprog_conf_offset)
                 if (oconf[0] == OPROG_MAGIC):
                     oprog = 1
 
@@ -1967,15 +1969,37 @@ def find_esp(args):
                     if (oconf[1] & OPROG_BCONF_NODE_INFO):
                         vparts = ((oconf[2] >> 16) & 0xff, (oconf[2] >> 8) & 0xff, oconf[2] & 0xff)
                         version = '.'.join(map(str, vparts))
+                        oprog_conf_offset = oprog_conf_offset + 8
                         #oconfStr = struct.unpack_from('31sB31sB31sB', data, 32)
-                        oconfStr = struct.unpack_from('31s', data, 32)
+                        oconfStr = struct.unpack_from('32s', data, oprog_conf_offset)
                         nodeName = oconfStr[0];
                         name = nodeName[:nodeName.index(b'\x00')].decode();
 
+                        # gitNum
+                        oprog_conf_offset = oprog_conf_offset + 32 * 3
+                        gitNum = struct.unpack_from('H', data, oprog_conf_offset)
+                        if gitNum[0] > 0:
+                            oprog_conf_offset = oprog_conf_offset + 2
+                            oconfStr = struct.unpack_from('8s', data, oprog_conf_offset)
+                            gitCommit = oconfStr[0];
+                            gitCommit = gitCommit[:gitCommit.index(b'\x00')].decode();
+                            version = version + '-' + str(gitNum[0]) + '.g' + gitCommit
+                        if (oconf[1] & OPROG_BCONF_VER_EX_DATE):
+                            oprog_conf_offset = oprog_conf_offset + 8
+                            dt = struct.unpack_from('BBBBBB', data, oprog_conf_offset)
+                            if gitNum[0] > 0:
+                                version = version + '.'
+                            else:
+                                version = version + '-'
+                            dt = list(dt)
+                            dt[0] = dt[0] + 2020
+                            dt = tuple(dt)
+                            version = version + '0dirty.' + ('%04d%02d%02d%02d%02d%02d' % dt)
+
             # add port description to the list
             ports.append((port, chipid, rboot, oprog, name, version))
-        except:
-            print("unexpected error")
+        except Exception as e:
+            print("unexpected error: %s" % e)
             pass
     for port in ports:
         print("Found:%s:0x%08x:%d:%d:%s:%s" % port)
