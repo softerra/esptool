@@ -1978,8 +1978,8 @@ def find_esp(args):
                         # gitNum
                         oprog_conf_offset = oprog_conf_offset + 32 * 3
                         gitNum = struct.unpack_from('H', data, oprog_conf_offset)
+                        oprog_conf_offset = oprog_conf_offset + 2
                         if gitNum[0] > 0:
-                            oprog_conf_offset = oprog_conf_offset + 2
                             oconfStr = struct.unpack_from('8s', data, oprog_conf_offset)
                             gitCommit = oconfStr[0];
                             gitCommit = gitCommit[:gitCommit.index(b'\x00')].decode();
